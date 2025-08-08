@@ -2,28 +2,43 @@ pipeline {
   agent any
 
   environment {
-    AWS_REGION            = 'us-east-1'
-    STACK_NAME            = 'MyCloudFormationStack'
-    TEMPLATE_FILE         = 'aws-templates/infra.json'
+        AWS_REGION            = 'us-east-1'
+        STACK_NAME            = 'MyCloudFormationStack'
+        TEMPLATE_FILE         = 'aws-templates/main.json'
   }
 
   stages {
     stage('Checkout') {
       steps {
-        git url: 'https://github.com/naveenkumarpsnk/aws-terraform.git', branch: 'main'
+        git( 
+            url: "https://github.com/naveenkumarpsnk/aws-terraform.git", 
+            branch: "main",
+        )
       }
     }
 
-    stage('Deploy CloudFormation') {
+    stage('Deploy INFRA CloudFormation') {
       steps {
-        withCredentials([awsCredentials(credentialsId: 'aws_cred')]) {
+        withCredentials([aws(credentialsId: 'aws_cred')]) {
           script {
             // Ensure the AWS CLI is configured
             sh """
           aws cloudformation deploy \
             --stack-name ${STACK_NAME} \
             --template-file ${TEMPLATE_FILE} \
-            --capabilities CAPABILITY_NAMED_IAM
+            --parameter-overrides \
+              CMDBExportDeploy=true \
+              TagsConditionKey=Environment \
+              SnowClientSecret= \
+              SnowClientId= \
+              LogLevel= INFO \
+              SNOWSNSTopicName= \
+              MonitoringEmailRecipient= psnaveenkumar000@gamil.com \
+              CMDBExportScheduleExpression= "rate(1 day)" \
+              ApiCompanyName= MyCompany \
+              AutoTagLambdaDeploy= true \
+              TagsConditionValue= Test \
+              SNOWSNSLambdaOrEmail= Email
         """
           }
         }

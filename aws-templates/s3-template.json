@@ -1,0 +1,23 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "A simple CloudFormation template to create an S3 bucket for testing.",
+  "Resources": {
+    "MyTestBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": "template-s3", 
+        "AccessControl": "Private", 
+        "Tags": [
+          {
+            "Key": "Environment",
+            "Value": "Test"
+          },
+          {
+            "Key": "Project",
+            "Value": "MyTestProject"
+          }
+        ]
+      }
+    }
+  }
+}
