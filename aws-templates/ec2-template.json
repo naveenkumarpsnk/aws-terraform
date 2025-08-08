@@ -1,0 +1,270 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "EC2 ECS cluster that starts out empty, with no EC2 instances yet. An ECS capacity provider automatically launches more EC2 instances as required on the fly when you request ECS to launch services or standalone tasks.",
+    "Parameters": {
+        "InstanceType": {
+            "Type": "String",
+            "Description": "EC2 instance type",
+            "Default": "t2.micro",
+            "AllowedValues": [
+                "t1.micro",
+                "t2.2xlarge",
+                "t2.large",
+                "t2.medium",
+                "t2.micro",
+                "t2.nano",
+                "t2.small",
+                "t2.xlarge",
+                "t3.2xlarge",
+                "t3.large",
+                "t3.medium",
+                "t3.micro",
+                "t3.nano",
+                "t3.small",
+                "t3.xlarge"
+            ]
+        },
+        "DesiredCapacity": {
+            "Type": "Number",
+            "Default": "0",
+            "Description": "Number of EC2 instances to launch in your ECS cluster."
+        },
+        "MaxSize": {
+            "Type": "Number",
+            "Default": "100",
+            "Description": "Maximum number of EC2 instances that can be launched in your ECS cluster."
+        },
+        "ECSAMI": {
+            "Description": "The Amazon Machine Image ID used for the cluster",
+            "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+            "Default": "/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id"
+        },
+        "VpcId": {
+            "Type": "AWS::EC2::VPC::Id",
+            "Description": "VPC ID where the ECS cluster is launched",
+            "Default": "vpc-1234567890abcdef0"
+        },
+        "SubnetIds": {
+            "Type": "List<AWS::EC2::Subnet::Id>",
+            "Description": "List of subnet IDs where the EC2 instances will be launched",
+            "Default": "subnet-021345abcdef67890"
+        }
+    },
+    "Resources": {
+        "ECSCluster": {
+            "Type": "AWS::ECS::Cluster",
+            "Properties": {
+                "ClusterSettings": [
+                    {
+                        "Name": "containerInsights",
+                        "Value": "enabled"
+                    }
+                ]
+            }
+        },
+        "ECSAutoScalingGroup": {
+            "Type": "AWS::AutoScaling::AutoScalingGroup",
+            "DependsOn": [
+                "ECSCluster",
+                "EC2Role"
+            ],
+            "Properties": {
+                "VPCZoneIdentifier": {
+                    "Ref": "SubnetIds"
+                },
+                "LaunchTemplate": {
+                    "LaunchTemplateId": {
+                        "Ref": "ContainerInstances"
+                    },
+                    "Version": {
+                        "Fn::GetAtt": [
+                            "ContainerInstances",
+                            "LatestVersionNumber"
+                        ]
+                    }
+                },
+                "MinSize": 0,
+                "MaxSize": {
+                    "Ref": "MaxSize"
+                },
+                "DesiredCapacity": {
+                    "Ref": "DesiredCapacity"
+                },
+                "NewInstancesProtectedFromScaleIn": true
+            },
+            "UpdatePolicy": {
+                "AutoScalingReplacingUpdate": {
+                    "WillReplace": "true"
+                }
+            }
+        },
+        "ContainerInstances": {
+            "Type": "AWS::EC2::LaunchTemplate",
+            "Properties": {
+                "LaunchTemplateName": "asg-launch-template-2",
+                "LaunchTemplateData": {
+                    "ImageId": {
+                        "Ref": "ECSAMI"
+                    },
+                    "InstanceType": {
+                        "Ref": "InstanceType"
+                    },
+                    "IamInstanceProfile": {
+                        "Name": {
+                            "Ref": "EC2InstanceProfile"
+                        }
+                    },
+                    "SecurityGroupIds": [
+                        {
+                            "Ref": "ContainerHostSecurityGroup"
+                        }
+                    ],
+                    "UserData": {
+                        "Fn::Base64": {
+                            "Fn::Sub": "#!/bin/bash -xe\n echo ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config\n yum install -y aws-cfn-bootstrap\n /opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource ContainerInstances --configsets full_install --region ${AWS::Region} &\n"
+                        }
+                    },
+                    "MetadataOptions": {
+                        "HttpEndpoint": "enabled",
+                        "HttpTokens": "required"
+                    }
+                }
+            }
+        },
+        "EC2InstanceProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [
+                    {
+                        "Ref": "EC2Role"
+                    }
+                ]
+            }
+        },
+        "CapacityProvider": {
+            "Type": "AWS::ECS::CapacityProvider",
+            "Properties": {
+                "AutoScalingGroupProvider": {
+                    "AutoScalingGroupArn": {
+                        "Ref": "ECSAutoScalingGroup"
+                    },
+                    "ManagedScaling": {
+                        "InstanceWarmupPeriod": 60,
+                        "MinimumScalingStepSize": 1,
+                        "MaximumScalingStepSize": 100,
+                        "Status": "ENABLED",
+                        "TargetCapacity": 100
+                    },
+                    "ManagedTerminationProtection": "ENABLED"
+                }
+            }
+        },
+        "CapacityProviderAssociation": {
+            "Type": "AWS::ECS::ClusterCapacityProviderAssociations",
+            "Properties": {
+                "CapacityProviders": [
+                    {
+                        "Ref": "CapacityProvider"
+                    }
+                ],
+                "Cluster": {
+                    "Ref": "ECSCluster"
+                },
+                "DefaultCapacityProviderStrategy": [
+                    {
+                        "Base": 0,
+                        "CapacityProvider": {
+                            "Ref": "CapacityProvider"
+                        },
+                        "Weight": 1
+                    }
+                ]
+            }
+        },
+        "ContainerHostSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Access to the EC2 hosts that run containers",
+                "VpcId": {
+                    "Ref": "VpcId"
+                }
+            }
+        },
+        "EC2Role": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "ec2.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                },
+                "Path": "/",
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role",
+                    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+                ]
+            }
+        },
+        "ECSTaskExecutionRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "ecs-tasks.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ],
+                            "Condition": {
+                                "ArnLike": {
+                                    "aws:SourceArn": {
+                                        "Fn::Sub": "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:*"
+                                    }
+                                },
+                                "StringEquals": {
+                                    "aws:SourceAccount": {
+                                        "Fn::Sub": "${AWS::AccountId}"
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                },
+                "Path": "/",
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+                ]
+            }
+        }
+    },
+    "Outputs": {
+        "ClusterName": {
+            "Description": "The ECS cluster into which to launch resources",
+            "Value": "ECSCluster"
+        },
+        "ECSTaskExecutionRole": {
+            "Description": "The role used to start up a task",
+            "Value": "ECSTaskExecutionRole"
+        },
+        "CapacityProvider": {
+            "Description": "The cluster capacity provider that the service should use to request capacity when it wants to start up a task",
+            "Value": "CapacityProvider"
+        }
+    }
+}

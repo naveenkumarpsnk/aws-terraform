@@ -2,9 +2,7 @@ pipeline {
   agent any
 
   environment {
-    AWS_ACCESS_KEY_ID     = credentials('template-deploy')
-    AWS_SECRET_ACCESS_KEY = credentials('naveen@PS2000')
-    AWS_DEFAULT_REGION    = 'us-east-1'
+    AWS_REGION            = 'us-east-1'
     STACK_NAME            = 'MyCloudFormationStack'
     TEMPLATE_FILE         = 'aws-templates/infra.json'
   }
@@ -18,12 +16,17 @@ pipeline {
 
     stage('Deploy CloudFormation') {
       steps {
-        sh """
+        withCredentials([awsCredentials(credentialsId: 'aws_cred')]) {
+          script {
+            // Ensure the AWS CLI is configured
+            sh """
           aws cloudformation deploy \
             --stack-name ${STACK_NAME} \
             --template-file ${TEMPLATE_FILE} \
             --capabilities CAPABILITY_NAMED_IAM
         """
+          }
+        }
       }
     }
   }
