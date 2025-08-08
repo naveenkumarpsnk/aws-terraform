@@ -1,0 +1,600 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Main Cloudformation Stackset template to deploy Cloud Operation Services AWS solution. deployed in unison with other nested templates via AWS CloudFormation StackSets",
+  "Parameters": {
+    "SourceBucketPrefix": {
+      "Type": "String",
+      "Default": "capgemini-cos",
+      "Description": "Enter pre-existing S3 Bucket name containing cloudformation templates for nested deployment"
+    },
+    "SNOWSNSTopicName": {
+      "Type": "String",
+      "Default": "COS-SNOW-Monitoring",
+      "Description": "Provide name for SNS Topic that will be created and linked to COS ServiceNow Lambda"
+    },
+    "AccountName": {
+      "Type": "String",
+      "Default": "ACME",
+      "Description": "Enter the name of Client. Used to create the selected resource"
+    },
+    "TagsConditionKey": {
+      "Type": "String",
+      "Default": "cos_managed",
+      "Description": "Resources with this Tag Key will be managed by COS Monitoring and SSM"
+    },
+    "TagsConditionValue": {
+      "Type": "String",
+      "Default": "yes",
+      "Description": "Resources with this Tag Value will be managed by COS Monitoring and SSM"
+    },
+    "ApiCompanyName": {
+      "Type": "String",
+      "Description": "COS-SNOW Lambda will populate the Company field in ServiceNow with this value. this must reflect the exact name of the intended company in ServiceNow"
+    },
+    "SnowClientId": {
+      "NoEcho": "true",
+      "Type": "String",
+      "Description": "Provide the iPaaS API authentication id. stored in Secret Manager. used by COS-SNOW Lambda to authenticate with iPaaS cloud native endpoint"
+    },
+    "SnowClientSecret": {
+      "NoEcho": "true",
+      "Type": "String",
+      "Description": "Provide the iPaaS API authentication secret. stored in Secret Manager. used by COS-SNOW Lambda to authenticate with iPaaS cloud native endpoint"
+    },
+    "BackupTagsConditionKey": {
+      "Type": "String",
+      "Default": "cos_backup",
+      "Description": "Resources with this Tag Key will be backed up by deployed COS AWS Backup rules"
+    },
+    "BackupTagsConditionValue": {
+      "Type": "String",
+      "Default": "yes",
+      "Description": "Resources with this Tag Value will be backed up by deployed COS AWS Backup rules"
+    },
+    "BackupPlanName": {
+      "Type": "String",
+      "Default": "COSBackupPlan",
+      "Description": "Enter name for AWS Backup Plan that will be deployed"
+    },
+    "BackupDailyRuleName": {
+      "Type": "String",
+      "Default": "COSDailyBackupRule",
+      "Description": "Enter the name for the AWS Backup Daily Backup Rule that will be deployed"
+    },
+    "BackupDailyScheduleExpression": {
+      "Type": "String",
+      "Default": "cron(4 3 ? * 2,3,4,5,6,7 *)",
+      "Description": "An AWS CRON expression specifying when AWS Backup initiates a Daily backup job. by default (03:04 AM MON-SAT)"
+    },
+    "BackupDailyDeleteAfterDays": {
+      "Type": "Number",
+      "Default": "8",
+      "Description": "Enter the amount of days that AWS Backup Daily Backups will be retained for"
+    },
+    "BackupWeeklyRuleName": {
+      "Type": "String",
+      "Default": "COSWeeklyBackupRule",
+      "Description": "Enter the name for the AWS Backup Weekly Backup Rule that will be deployed"
+    },
+    "BackupWeeklyScheduleExpression": {
+      "Type": "String",
+      "Default": "cron(4 3 ? * 1 *)",
+      "Description": "An AWS CRON expression specifying when AWS Backup initiates a Weekly backup job. by default  (03:04 AM every Sunday)"
+    },
+    "BackupWeeklyDeleteAfterDays": {
+      "Type": "Number",
+      "Default": "35",
+      "Description": "Enter the amount of days that AWS Backup Weekly Backups will be retained for (5 weeks)"
+    },
+    "BackupMonthlyRuleName": {
+      "Type": "String",
+      "Default": "COSMonthlyBackupRule",
+      "Description": "Enter the name for the AWS Backup Monthly Backup Rule that will be deployed"
+    },
+    "BackupMonthlyScheduleExpression": {
+      "Type": "String",
+      "Default": "cron(04 1 28 * ? *)",
+      "Description": "An AWS CRON expression specifying when AWS Backup initiates a Monthly backup job. by default (01:04 AM 28th of every month)"
+    },
+    "BackupMonthlyDeleteAfterDays": {
+      "Type": "Number",
+      "Default": "396",
+      "Description": "Enter the amount of days that AWS Backup Monthly Backups will be retained for (13 months)"
+    },
+    "BackupDeleteBasedOnTagEnabled" : {
+      "Type": "String",
+      "AllowedValues": [
+        true,
+        false
+      ],
+      "Default": false,
+      "Description": "Specifies if the Lambda function for deleting EBS snapshots should be deployed. The optional function delete snapshots that have a \"DeleteOn\" tag containing the current day formatted as YYYY-MM-DD"
+    },
+    "BackupSelectionName": {
+      "Type": "String",
+      "Default": "COSSelectedResouces",
+      "Description": "Enter the name for the AWS Backup resource selection that will be deployed"
+    },
+    "BackupVaultName": {
+      "Type": "String",
+      "Default": "COSBackupVault",
+      "Description": "Enter the name of the AWS Backup Vault that will be deployed and store backups"
+    },
+    "BackupReportRecipient": {
+      "Default": "john.doe@capgemini.com",
+      "Type": "String",
+      "Description": "Enter the recipient email address that will receive scheduled emails containing a link to Monthly AWS Backup Reports"
+    },
+    "BackupReportsBucketName": {
+      "Default": "cos-backup-reports",
+      "Type": "String",
+      "Description": "Enter the name of the S3 bucket that will be created and used to store monthly AWS Backup reports"
+    },
+    "BackupReportsTopicName": {
+      "Default": "COS-Backup-Reports",
+      "Type": "String",
+      "Description": "Enter the name for the SNS Topic that will be created and used by the backup report lambda to email monthly AWS Backup reports"
+    },
+    "BackupReportGenerationScheduleDaily": {
+      "Default": "cron(30 01 * * ? *)",
+      "Type": "String",
+      "Description": "Enter the schedule for Daily AWS Backup report generation. AWS CRON expression specifying when the Backup EventBridge Rule will initiate the generation of daily AWS Backup reports.by default (01:30 GMT everyday)"
+    },
+    "BackupReportGenerationScheduleWeekly": {
+      "Default": "cron(30 01 ? * 2 *)",
+      "Type": "String",
+      "Description": "Enter the schedule for Weekly AWS Backup report generation. AWS CRON expression specifying when the Backup EventBridge Rule will initiate the generation of weekly AWS Backup reports.by default (01:30 on each monday)"
+    },
+    "BackupReportGenerationScheduleMonthly": {
+      "Default": "cron(30 01 L * ? *)",
+      "Type": "String",
+      "Description": "Enter the schedule for Monthly AWS Backup report generation. AWS CRON expression specifying when the Backup EventBridge Rule will initiate the generation of monthly AWS Backup reports. by default (01:30 AM last day of every month)"
+    },
+    "BackupLinkValidity": {
+      "Default": 604800,
+      "Type": "Number",
+      "Description": "Enter how long in seconds the AWS Backup Report notification link will be valid for (86400 - 24h, 604800 - 7 days)"
+    },
+    "PatchingReportsBucketName": {
+      "Default": "cos-patching-reports",
+      "Type": "String",
+      "Description": "Enter the name of the S3 bucket that will be created and used to store monthly SSM Patch Manager patching reports"
+    },
+    "PatchingWindowsScheduleExpression": {
+      "Type": "String",
+      "Default": "cron(30 23 ? * SAT-SUN *)",
+      "Description": "An AWS CRON expression specifying when AWS SSMPatch Manager initiates a scheduled windows backup job.(23:30 PM SAT-SUN every month)"
+    },
+    "PatchingLinuxScheduleExpression": {
+      "Type": "String",
+      "Default": "cron(30 23 ? 1,4,7,10 SAT-SUN *)",
+      "Description": "An AWS CRON expression specifying when AWS SSMPatch Manager initiates a scheduled linux backup job.(23:30 PM SAT-SUN every 3 months)"
+    },
+    "PatchingInstantReportTopicName": {
+      "Type": "String",
+      "Default": "COS-Patching-instant-report-topic",
+      "Description": "Enter the name for the SNS Topic that will be created and used as the endpoint for Failed Patching Notifications"
+    },
+    "PatchingPeriodicReportTopicName": {
+      "Default": "COS-Patching-periodic-report-topic",
+      "Type": "String",
+      "Description": "Enter the name for the SNS Topic that will be created and used by the patching report lambda to email monthly SSM Patch Manager reports"
+    },
+    "PatchingReportRecipient": {
+      "Default": "john.doe@capgemini.com",
+      "Type": "String",
+      "Description": "Enter the recipient email address that will receive scheduled emails containing a link to Monthly SSM Patch Manager Reports"
+    },
+    "PatchingWindowsServerTag": {
+      "Default": "coswindowsserver",
+      "Type": "String",
+      "Description": "Windows Resources with this Patch Group Tag Value will be patched by the COS Windows Server Baseline"
+    },
+    "PatchingLinuxServerTag": {
+      "Default": "coslinuxserver",
+      "Type": "String",
+      "Description": "Linux Resources with this Patch Group Tag Value will be patched by the COS Linux Server Baseline"
+    },
+    "PatchingLinkValidity": {
+      "Default": 604800,
+      "Type": "Number",
+      "Description": "Enter how long in seconds the SSM Patch Manager Report notification link will be valid for (86400 - 24h, 604800 - 7 days)"
+    },
+    "PatchingReportGenerationDate": {
+      "Default": "cron(01 09 L * ? *)",
+      "Type": "String",
+      "Description": "Enter the schedule for AWS SSM Patch Manger report generation. AWS CRON expression specifying when the Patching EventBridge Rule will initiate the generation of monthly SSM Patch Manager reports (09:01 on the last day of each month)"
+    },
+    "PerformanceReportRecipient": {
+      "Default": "david.wansell@capgemini.com",
+      "Type": "String",
+      "Description": "Enter the recipient email address that will receive scheduled emails containing a link to Monthly AWS Performance Reports"
+    },
+    "PerformanceReportsBucketName": {
+      "Default": "cos-perf-rep-dev",
+      "Type": "String",
+      "Description": "Enter the name of the S3 bucket that will be created and used to store monthly AWS Performance reports"
+    },
+    "PerformanceReportsTopicName": {
+      "Default": "COS-Performance-Reports",
+      "Type": "String",
+      "Description": "Enter the name for the SNS Topic that will be created and used by the Performance report lambda to email monthly AWS Performance reports"
+    },
+    "PerformanceReportGenerationScheduleMonthly": {
+      "Default": "cron(30 1 1 * ? *)",
+      "Type": "String",
+      "Description": "Enter the schedule for Monthly AWS Performance report generation. AWS CRON expression specifying when the Performance EventBridge Rule will initiate the generation of monthly AWS Performance reports. by default (01:30 AM first day of every month)"
+    },
+    "PerformanceLinkValidity": {
+      "Default": 604800,
+      "Type": "Number",
+      "Description": "Enter how long in seconds the AWS Performance Report notification link will be valid for (86400 - 24h, 604800 - 7 days)"
+    },
+    "LogLevel": {
+      "Default": 3,
+      "Type": "Number",
+      "Description": "Allows various details of lambda events to be logged. Value must be in range:<0- no logging, 1- production, 2- dev, 3 maximum logging>"
+    },
+    "CMDBExportScheduleExpression": {
+      "Default": "cron(30 04 * * ? *)",
+      "Type": "String",
+      "Description": "An AWS CRON expression specifying when to start Lambda for exporting CMDB inventory."
+    },
+    "CMDBExportDeploy": {
+      "Type": "String",
+      "AllowedValues": [
+        true,
+        false
+      ],
+      "Default": false,
+      "Description": "Specifies if the Lambda function for exporting CMDB should be deployed to this region."
+    },
+    "KinesisAthenaBucketName": {
+      "Default": "cos-logging",
+      "Type": "String",
+      "Description": "Enter S3 Bucket name that will be created and used to store converted CloudWatch Logs and Athena query results"
+    },
+    "MonitoringEnabled": {
+      "Type": "String",
+      "AllowedValues": [
+        true,
+        false
+      ],
+      "Default": true,
+      "Description": "Specifies if the COS Monitoring module and resources will be deployed"
+    },
+    "LoggingEnabled": {
+      "Type": "String",
+      "AllowedValues": [
+        true,
+        false
+      ],
+      "Default": true,
+      "Description": "Specifies if the COS Logging module and resources will be deployed"
+    },
+    "PatchingEnabled": {
+      "Type": "String",
+      "AllowedValues": [
+        true,
+        false
+      ],
+      "Default": true,
+      "Description": "Specifies if the COS Patching module and resources will be deployed"
+    },
+    "BackupEnabled": {
+      "Type": "String",
+      "AllowedValues": [
+        true,
+        false
+      ],
+      "Default": true,
+      "Description": "Specifies if the COS Backup module and resources will be deployed"
+    },
+    "AutoTagLambdaDeploy" : {
+      "Type" : "String",
+      "AllowedValues" : [
+        true,
+        false
+      ],
+      "Default" : false,
+      "Description" : "Specifies if the Lambda function for tagging ec2 and related resources should be deployed"
+    },
+    "SNOWSNSLambdaOrEmail": {
+      "Type": "String",
+      "Default": "lambda",
+      "Description": "Provide choice of COS-SNOW SNS topic subscription. Choices: COS-SNOW-Listener lambda or email address",
+      "AllowedValues": [
+        "lambda",
+        "email"
+      ]
+    },
+    "MonitoringEmailRecipient": {
+      "Type": "String",
+      "Default": "john.doe@capgemini.com",
+      "Description": "Enter the recipient email address that will receive all monitoring alerts from SNOWSNS Topic if EMAIL is chosen for NOWSNSLambdaOrEmail"
+    },
+    "IncidentManagerEnabled": {
+      "Type": "String",
+      "AllowedValues": [
+        true,
+        false
+      ],
+      "Default": false,
+      "Description": "Specifies if the COS Incident Manager module and resources will be deployed"
+    },
+    "IncidentManagerReplicationSetEnabled": {
+      "Type": "String",
+      "AllowedValues": [
+        true,
+        false
+      ],
+      "Default": false,
+      "Description": "Set to true if Incident Manager service is already enabled"
+    },
+    "IncidentManagerRegionReplication": {
+        "Type": "String",
+        "AllowedValues": [
+            false,
+            "us-east-1",
+            "us-east-2",
+            "ap-southeast-1",
+            "ap-southeast-2",
+            "ap-northeast-1",
+            "eu-central-1",
+            "eu-west-1",
+            "eu-north-1"
+        ],
+        "Default": false,
+        "Description": "Choose region which will be added to the replication set to replicates data. False value means no replication to another region and Incident Manager data will be only in the region where the template is deployed."
+    },
+    "IncidentManagerSseKmsKeyDefaultRegion": {
+        "Type": "String",
+        "Default": "AWS owned CMK",
+        "Description": "Enter pre-existing own KMS key (ID value) to use to encrypt your replication set or use default AWS owned CMK. The key will be for the region where the template is being deployed."
+    },
+    "IncidentManagerSseKmsKeyReplicationRegion": {
+        "Type": "String",
+        "Default": "AWS owned CMK",
+        "Description": "Enter pre-existing own KMS key (ID value) to use to encrypt your replication set or use default AWS owned CMK. The key will be for region selected in IncidentManagerRegionReplication. Leave default if IncidentManagerRegionReplication parameter equals \"false\" or if IncidentManagerSseKmsKeyDefaultRegion contains \"AWS owned CMK\". "
+    },
+    "AvailabilityReportRecipient": {
+      "Default": "david.wansell@capgemini.com",
+      "Type": "String",
+      "Description": "Enter the recipient email address that will receive scheduled emails containing a link to Monthly AWS Availability Reports"
+    },
+    "AvailabilityReportsBucketName": {
+      "Default": "cos-availability-reports-bucket",
+      "Type": "String",
+      "Description": "Enter the name of the S3 bucket that will be created and used to store monthly AWS Availability reports"
+    },
+    "AvailabilityReportsTopicName": {
+      "Default": "COS-Availability-Reports",
+      "Type": "String",
+      "Description": "Enter the name for the SNS Topic that will be created and used by the Availability report lambda to email monthly AWS Availability reports"
+    },
+    "AvailabilityReportGenerationScheduleMonthly": {
+      "Default": "cron(30 1 1 * ? *)",
+      "Type": "String",
+      "Description": "Enter the schedule for Monthly AWS Availability report generation. AWS CRON expression specifying when the Availability EventBridge Rule will initiate the generation of monthly AWS Availability reports. by default (01:30 AM first day of every month)"
+    },
+    "AvailabilityLinkValidity": {
+      "Default": 604800,
+      "Type": "Number",
+      "Description": "Enter how long in seconds the AWS Availability Report notification link will be valid for (86400 - 24h, 604800 - 7 days)"
+    },
+    "EventsReportsBucketName": {
+      "Default": "cos-events-reports-bucket",
+      "Type": "String",
+      "Description": "Enter the name of the S3 bucket that will be created and used to store monthly AWS Events reports"
+  },
+  "EventsReportRecipient": {
+      "Default": "david.wansell@capgemini.com",
+      "Type": "String",
+      "Description": "Enter the recipient email address that will receive scheduled emails containing a link to Monthly AWS Events Reports"
+  },
+  "EventsReportsTopicName": {
+      "Default": "COS-Events-Reports",
+      "Type": "String",
+      "Description": "Enter the name for the SNS Topic that will be created and used by the Events report lambda to email monthly AWS Events reports"
+  },
+  "EventsLinkValidity": {
+      "Default": 604800,
+      "Type": "Number",
+      "Description": "Enter how long in seconds the AWS Events Report notification link will be valid for (86400 - 24h, 604800 - 7 days)"
+  },
+  "EventsReportGenerationScheduleMonthly" : {
+      "Default": "cron(30 1 1 * ? *)",
+      "Type": "String",
+      "Description": "Enter the schedule for Monthly AWS Events report generation. AWS CRON expression specifying when the Events EventBridge Rule will initiate the generation of monthly AWS Events reports. by default (01:30 AM first day of every month)"   
+  },
+  "EC2InstanceCloudWatchLogGroupCreated": {
+    "Type": "String",
+    "Default": false,
+    "AllowedValues": [
+      true,
+      false
+    ],
+    "Description": "Specifies if log group named \"COS-EC2-Instance-CloudWatch-Logs\" exists. Log group will be created if doesn't exist"
+  }
+  },
+
+  "Conditions": {
+    "MonitoringEnabled": {
+      "Fn::Equals": [
+        "true",
+        {
+          "Ref": "MonitoringEnabled"
+        }
+      ]
+    },
+    "LoggingEnabled": {
+      "Fn::Equals": [
+        "true",
+        {
+          "Ref": "LoggingEnabled"
+        }
+      ]
+    },
+    "PatchingEnabled": {
+      "Fn::Equals": [
+        "true",
+        {
+          "Ref": "PatchingEnabled"
+        }
+      ]
+    },
+    "BackupEnabled": {
+      "Fn::Equals": [
+        "true",
+        {
+          "Ref": "BackupEnabled"
+        }
+      ]
+    }
+  },
+  "Resources": {
+      "InfraStack": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL" : { "Fn::Sub": [ "https://${SourceBucketPrefix}-source-${AWS::Region}.s3.amazonaws.com/infra.json", { "SourceBucketPrefix": {"Ref" : "SourceBucketPrefix" }} ]},
+        "TimeoutInMinutes": 20,
+        "Parameters": {
+                  "TagsConditionKey": { "Ref": "TagsConditionKey" },
+                  "TagsConditionValue": { "Ref": "TagsConditionValue" },
+                  "SourceBucketPrefix": { "Ref": "SourceBucketPrefix" },
+                  "SNOWSNSTopicName": { "Ref": "SNOWSNSTopicName" },
+                  "ApiCompanyName": { "Ref": "ApiCompanyName" },
+                  "SnowClientId": { "Ref": "SnowClientId" },
+                  "SnowClientSecret": { "Ref": "SnowClientSecret" },
+                  "LogLevel": { "Ref": "LogLevel" },
+                  "CMDBExportScheduleExpression": { "Ref": "CMDBExportScheduleExpression" },
+                  "CMDBExportDeploy": { "Ref": "CMDBExportDeploy" },
+                  "AutoTagLambdaDeploy" : {"Ref" : "AutoTagLambdaDeploy"},
+                  "SNOWSNSLambdaOrEmail": { "Ref": "SNOWSNSLambdaOrEmail" },
+                  "MonitoringEmailRecipient": { "Ref": "MonitoringEmailRecipient" }
+            }
+          }
+      },
+      "LoggingStack": {
+          "Type": "AWS::CloudFormation::Stack",
+          "Condition": "LoggingEnabled",
+          "Properties": {
+            "TemplateURL" : { "Fn::Sub": [ "https://${SourceBucketPrefix}-source-${AWS::Region}.s3.amazonaws.com/logging.json", { "SourceBucketPrefix": {"Ref" : "SourceBucketPrefix" }} ]},
+            "TimeoutInMinutes": 20,
+            "Parameters": {
+              "SourceBucketPrefix": { "Ref": "SourceBucketPrefix" },
+              "AccountName": { "Ref": "AccountName" },
+              "SNOWSNSTopicARN": { "Fn::GetAtt": ["InfraStack", "Outputs.SNOWSNSTopicARN"] },
+              "TagsConditionKey": { "Ref": "TagsConditionKey" },
+              "TagsConditionValue": { "Ref": "TagsConditionValue" },
+              "MonitoringEnabled": {"Ref": "MonitoringEnabled" },
+              "LoggingEnabled": {"Ref": "LoggingEnabled"},
+              "KinesisAthenaBucketName": { "Ref": "KinesisAthenaBucketName" },
+              "EC2InstanceCloudWatchLogGroupCreated": { "Ref": "EC2InstanceCloudWatchLogGroupCreated" }
+            }
+          }
+        },
+      "PatchingStack":  {
+        "Type" : "AWS::CloudFormation::Stack",
+        "Condition": "PatchingEnabled",
+        "Properties" : {
+            "TemplateURL" : { "Fn::Sub": [ "https://${SourceBucketPrefix}-source-${AWS::Region}.s3.amazonaws.com/patching.json", { "SourceBucketPrefix": {"Ref" : "SourceBucketPrefix" }} ]},
+            "TimeoutInMinutes" : 20,
+            "Parameters": {
+                  "SNOWSNSTopicARN": { "Fn::GetAtt": ["InfraStack", "Outputs.SNOWSNSTopicARN"] },
+                  "SourceBucketPrefix": { "Ref": "SourceBucketPrefix" },
+                  "PatchingReportsBucketName": { "Ref": "PatchingReportsBucketName"},
+                  "PatchingWindowsScheduleExpression": { "Ref": "PatchingWindowsScheduleExpression"},
+                  "PatchingLinuxScheduleExpression": { "Ref": "PatchingLinuxScheduleExpression"},
+                  "PatchingInstantReportTopicName": { "Ref": "PatchingInstantReportTopicName" },
+                  "PatchingPeriodicReportTopicName": { "Ref": "PatchingPeriodicReportTopicName" },
+                  "PatchingReportRecipient": { "Ref": "PatchingReportRecipient" },
+                  "PatchingWindowsServerTag": { "Ref": "PatchingWindowsServerTag" },
+                  "PatchingLinuxServerTag": { "Ref": "PatchingLinuxServerTag" },
+                  "PatchingLinkValidity": { "Ref": "PatchingLinkValidity" },
+                  "PatchingReportGenerationDate": { "Ref": "PatchingReportGenerationDate" },
+                  "LogLevel": { "Ref": "LogLevel" },
+                  "SSMAutomationDocumentRunCommandLinux": { "Fn::GetAtt": ["InfraStack", "Outputs.SSMAutomationDocumentRunCommandLinux"] },
+                  "SSMAutomationDocumentRunCommandWindows": { "Fn::GetAtt": ["InfraStack", "Outputs.SSMAutomationDocumentRunCommandWindows"] },
+                  "SSMAutomationCreateBackup": { "Fn::GetAtt": ["InfraStack", "Outputs.SSMAutomationCreateBackup"] },
+                  "TagsConditionKey": { "Ref": "TagsConditionKey" },
+                  "TagsConditionValue": { "Ref": "TagsConditionValue" }
+            }
+          }
+        },
+      "MonitoringStack":  {
+          "Type" : "AWS::CloudFormation::Stack",
+          "Condition": "MonitoringEnabled",
+          "Properties" : {
+              "TemplateURL" : { "Fn::Sub": [ "https://${SourceBucketPrefix}-source-${AWS::Region}.s3.amazonaws.com/monitoring.json", { "SourceBucketPrefix": {"Ref" : "SourceBucketPrefix" }} ]},
+              "TimeoutInMinutes" : 20,
+              "Parameters": {
+                  "SourceBucketPrefix": { "Ref": "SourceBucketPrefix" },
+                  "AccountName": { "Ref": "AccountName" },
+                  "SNOWSNSTopicARN": { "Fn::GetAtt": ["InfraStack", "Outputs.SNOWSNSTopicARN"] },
+                  "TagsConditionKey": { "Ref": "TagsConditionKey" },
+                  "TagsConditionValue": { "Ref": "TagsConditionValue" },
+                  "IncidentManagerEnabled": {"Ref": "IncidentManagerEnabled" },
+                  "IncidentManagerReplicationSetEnabled": {"Ref": "IncidentManagerReplicationSetEnabled"},
+                  "IncidentManagerRegionReplication" : {"Ref": "IncidentManagerRegionReplication"},
+                  "IncidentManagerSseKmsKeyDefaultRegion" : {"Ref": "IncidentManagerSseKmsKeyDefaultRegion"},
+                  "IncidentManagerSseKmsKeyReplicationRegion" : {"Ref": "IncidentManagerSseKmsKeyReplicationRegion"},
+                  "MonitoringEnabled": {"Ref": "MonitoringEnabled" },
+                  "LoggingEnabled": {"Ref": "LoggingEnabled"},
+                  "AvailabilityReportRecipient" : {"Ref" : "AvailabilityReportRecipient"},
+                  "AvailabilityReportsBucketName" : {"Ref" :"AvailabilityReportsBucketName"},
+                  "AvailabilityReportsTopicName": {"Ref" : "AvailabilityReportsTopicName"},
+                  "AvailabilityLinkValidity": { "Ref" : "AvailabilityLinkValidity" },
+                  "AvailabilityReportGenerationScheduleMonthly": {"Ref" : "AvailabilityReportGenerationScheduleMonthly"},
+                  "PerformanceReportRecipient" : {"Ref" : "PerformanceReportRecipient"},
+                  "PerformanceReportsBucketName" : {"Ref" :"PerformanceReportsBucketName"},
+                  "PerformanceReportsTopicName": {"Ref" : "PerformanceReportsTopicName"},
+                  "PerformanceLinkValidity": { "Ref" : "PerformanceLinkValidity" },
+                  "PerformanceReportGenerationScheduleMonthly": {"Ref" : "PerformanceReportGenerationScheduleMonthly"},
+                  "EventsReportRecipient" : {"Ref" : "EventsReportRecipient"},
+                  "EventsReportsBucketName" : {"Ref" :"EventsReportsBucketName"},
+                  "EventsReportsTopicName": {"Ref" : "EventsReportsTopicName"},
+                  "EventsLinkValidity": { "Ref" : "EventsLinkValidity" },
+                  "EventsReportGenerationScheduleMonthly": {"Ref" : "EventsReportGenerationScheduleMonthly"}
+              }
+            }
+      },
+      "BackupStack":  {
+          "Type" : "AWS::CloudFormation::Stack",
+          "Condition": "BackupEnabled",
+          "Properties" : {
+              "TemplateURL" : { "Fn::Sub": [ "https://${SourceBucketPrefix}-source-${AWS::Region}.s3.amazonaws.com/backup.json", { "SourceBucketPrefix": {"Ref" : "SourceBucketPrefix" }} ]},
+              "TimeoutInMinutes" : 20,
+              "Parameters": {
+                  "SourceBucketPrefix": { "Ref": "SourceBucketPrefix" },
+                  "SNOWSNSTopicARN": { "Fn::GetAtt": ["InfraStack", "Outputs.SNOWSNSTopicARN"] },
+                  "BackupTagsConditionKey": { "Ref": "BackupTagsConditionKey" },
+                  "BackupTagsConditionValue": { "Ref": "BackupTagsConditionValue" },
+                  "BackupPlanName": { "Ref": "BackupPlanName" },
+                  "BackupDailyRuleName": { "Ref": "BackupDailyRuleName" },
+                  "BackupDailyScheduleExpression": { "Ref": "BackupDailyScheduleExpression" },
+                  "BackupDailyDeleteAfterDays": { "Ref": "BackupDailyDeleteAfterDays" },
+                  "BackupWeeklyRuleName": { "Ref": "BackupWeeklyRuleName" },
+                  "BackupWeeklyScheduleExpression": { "Ref": "BackupWeeklyScheduleExpression" },
+                  "BackupWeeklyDeleteAfterDays": { "Ref": "BackupWeeklyDeleteAfterDays" },
+                  "BackupMonthlyRuleName": { "Ref": "BackupMonthlyRuleName" },
+                  "BackupMonthlyScheduleExpression": { "Ref": "BackupMonthlyScheduleExpression" },
+                  "BackupMonthlyDeleteAfterDays": { "Ref": "BackupMonthlyDeleteAfterDays" },
+                  "BackupDeleteBasedOnTagEnabled": {"Ref": "BackupDeleteBasedOnTagEnabled"},
+                  "BackupSelectionName": { "Ref": "BackupSelectionName" },
+                  "BackupVaultName": { "Ref": "BackupVaultName" },
+                  "BackupReportRecipient": { "Ref": "BackupReportRecipient" },
+                  "BackupReportsBucketName": { "Ref": "BackupReportsBucketName" },
+                  "BackupReportsTopicName": { "Ref": "BackupReportsTopicName" },
+                  "BackupReportGenerationScheduleDaily": { "Ref": "BackupReportGenerationScheduleDaily" },
+                  "BackupReportGenerationScheduleWeekly": { "Ref": "BackupReportGenerationScheduleWeekly" },
+                  "BackupLinkValidity": { "Ref": "BackupLinkValidity" },
+                  "SSMAutomationDocumentRunCommandLinux": { "Fn::GetAtt": ["InfraStack", "Outputs.SSMAutomationDocumentRunCommandLinux"] },
+                  "SSMAutomationDocumentRunCommandWindows": { "Fn::GetAtt": ["InfraStack", "Outputs.SSMAutomationDocumentRunCommandWindows"] },
+                  "SSMAutomationCreateBackup": { "Fn::GetAtt": ["InfraStack", "Outputs.SSMAutomationCreateBackup"] },
+                  "BackupReportGenerationScheduleMonthly": { "Ref": "BackupReportGenerationScheduleMonthly" }
+              }
+      }
+    }
+  }
+}

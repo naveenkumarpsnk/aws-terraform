@@ -1,0 +1,1115 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Main Cloudformation to deploy Cloud and Edge Operational Services solution",
+  "Parameters": {
+        "TagsConditionKey": {
+            "Type": "String",
+            "Description": "Resources with this Tag Key will be managed by COS Monitoring and SSM"
+          },
+        "TagsConditionValue": {
+          "Type": "String",
+          "Description": "Resources with this Tag Value will be managed by COS Monitoring and SSM"
+        },
+        "SourceBucketPrefix": {
+            "Type": "String",
+            "Description": "Enter pre-existing S3 Bucket name containing cloudformation templates for nested deployment",
+            "Default": "capgemini-cos"
+        },
+        "SNOWSNSTopicName": {
+            "Type": "String",
+            "Description": "Provide name for SNS Topic that will be created and linked to COS ServiceNow Lambda"
+        },
+        "SNOWSNSLambdaOrEmail": {
+          "Type": "String",
+          "Description": "Provide choice of COS-SNOW SNS topic subscription. Choices: COS-SNOW-Listener lambda or email address",
+          "AllowedValues": [
+            "lambda",
+            "email"
+          ]
+        },
+        "MonitoringEmailRecipient": {
+        "Type": "String",
+        "Description": "Enter the recipient email address that will receive all monitoring alerts from SNOWSNS Topic if EMAIL is chosen for NOWSNSLambdaOrEmail"
+      },
+        "ApiCompanyName" : {
+          "Type" : "String",
+          "Description" : "COS-SNOW Lambda will populate the Company field in ServiceNow with this value. this must reflect the exact name of the intended company in ServiceNow"
+        },
+        "SnowClientId" : {
+          "NoEcho" : "true",
+          "Type" : "String",
+          "Description" : "Provide the iPaaS API authentication id. stored in Secret Manager. used by COS-SNOW Lambda to authenticate with iPaaS cloud native endpoint"
+        },
+        "SnowClientSecret" : {
+          "NoEcho" : "true",
+          "Type" : "String",
+          "Description" : "Provide the iPaaS API authentication secret. stored in Secret Manager. used by COS-SNOW Lambda to authenticate with iPaaS cloud native endpoint"
+        },
+        "LogLevel" : {
+          "Type" : "Number",
+          "Description" : "Allows various details of lambda events to be logged. Value must be in range:<0- no logging, 1- production, 2- dev, 3 maximum logging>"
+        },
+        "CMDBExportScheduleExpression": {
+          "Type": "String",
+          "Description": "An AWS CRON expression specifying when to start Lambda for exporting CMDB inventory."
+        },
+        "CMDBExportDeploy": {
+          "Type": "String",
+          "AllowedValues": [
+            true,
+            false
+          ],
+          "Description": "Specifies if the Lambda function for exporting CMDB should be deployed to this region."
+        },
+        "AutoTagLambdaDeploy" : {
+          "Type" : "String",
+          "AllowedValues" : [
+            true,
+            false
+          ],
+          "Description" : "Specifies if the Lambda function and related resources should be deployed"
+        },
+        "LinuxScriptName" : {
+          "Type" : "String",
+          "Default": "onboarding_scripts/cloud_init_linux.txt",
+          "Description" : "Name of linux bash script, used by brownfield SSM lambda function to setup for cloudinit. Installing SSM Agent into Linux EC2 instances"
+        },
+        "WindowsScriptName" : {
+          "Type" : "String",
+          "Default": "onboarding_scripts/cloud_init_windows.txt",
+          "Description" : "Name of Windows Powershell script, used by brownfield SSM lambda function to setup for cloudinit. Installing SSM Agent into Windows EC2 instances"
+        }
+      },
+  "Conditions": {
+    "CMDBExportDeploy": {
+      "Fn::Equals": [
+        "true",
+        {
+          "Ref": "CMDBExportDeploy"
+        }
+      ]
+    },
+    "AutoTagLambdaDeploy": {
+      "Fn::Equals": [
+        "true",
+        {
+          "Ref": "AutoTagLambdaDeploy"
+        }
+      ]
+    },
+    "SNSChecking" : {
+      "Fn::Equals" : [
+        {
+          "Ref" : "SNOWSNSLambdaOrEmail"
+        },
+         "lambda"
+      ]
+    }
+},
+  "Resources": {
+          "EnableAssociation": {
+              "Type": "AWS::SSM::Association",
+              "Properties": {
+                  "ScheduleExpression": "rate(30 minutes)",
+                  "AssociationName": "Inventory-Association-Enable",
+                  "Name": "AWS-GatherSoftwareInventory",
+                  "Targets": [
+                      {
+                          "Key": { "Fn::Sub" : "tag:${TagsConditionKey}"},
+                          "Values": [
+                              {"Ref" : "TagsConditionValue"}
+                          ]
+                      }
+                  ]
+              }
+          },
+
+          "SSMAutomationDocumentRunCommandLinux": {
+            "Type": "AWS::SSM::Document",
+            "Properties": {
+              "DocumentType": "Automation",
+              "Content": {
+                "description": "COS SSM Automation Document that will execute shell command/script on targeted Linux EC2 instances",
+                "assumeRole": {
+                  "Fn::GetAtt": [
+                    "SSMAutomationRoleRunCommand",
+                    "Arn"
+                  ]
+                },
+                "schemaVersion": "0.3",
+                "parameters": {
+                  "InstanceId": {
+                    "type": "String",
+                    "description": "List of instances where to execute command"
+                  },
+                  "Command": {
+                    "type": "String",
+                    "description": "Command to execute"
+                  }
+                },
+                "mainSteps": [
+                  {
+                    "name": "RunCommand",
+                    "action": "aws:runCommand",
+                    "inputs": {
+                      "DocumentName": "AWS-RunShellScript",
+                      "InstanceIds": [
+                        "{{ InstanceId }}"
+                      ],
+                      "Parameters": {
+                        "commands": [
+                          "{{ Command }}"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "SSMAutomationDocumentRunCommandWindows": {
+            "Type": "AWS::SSM::Document",
+            "Properties": {
+              "DocumentType": "Automation",
+              "Content": {
+                "description": "COS SSM Automation Document that will execute powershell command/script on targeted Windows EC2 instances",
+                "assumeRole": {
+                  "Fn::GetAtt": [
+                    "SSMAutomationRoleRunCommand",
+                    "Arn"
+                  ]
+                },
+                "schemaVersion": "0.3",
+                "parameters": {
+                  "InstanceId": {
+                    "type": "String",
+                    "description": "List of instances where to execute tasks"
+                  },
+                  "Command": {
+                    "type": "String",
+                    "description": "Command to execute"
+                  }
+                },
+                "mainSteps": [
+                  {
+                    "name": "RunCommand",
+                    "action": "aws:runCommand",
+                    "inputs": {
+                      "DocumentName": "AWS-RunPowerShellScript",
+                      "InstanceIds": [
+                        "{{ InstanceId }}"
+                      ],
+                      "Parameters": {
+                        "commands": [
+                          "{{ Command }}"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "SSMAutomationRoleRunCommand": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+              "Description" : "Role created by COS Core Infra Solution Deployment. Created for the SSMAutomationDocumentRunCommandWindows and SSMAutomationDocumentRunCommandLinux SSM Automation documents to assume. grants SSM automation role permissions",
+              "AssumeRolePolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Effect": "Allow",
+                    "Principal": {
+                      "Service": "ssm.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                  }
+                ]
+              },
+              "Path": "/service-role/",
+              "ManagedPolicyArns": [
+                "arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole"
+              ]
+
+            }
+          },
+          "SSMAutomationCreateBackup": {
+            "Type": "AWS::SSM::Document",
+            "Properties": {
+              "DocumentType": "Automation",
+              "Content": {
+                "description": "COS SSM Automation Document that will create an backup of EC2 instances and store in an AWS Backup Vault and retain for X amount of days",
+                "assumeRole": {
+                  "Fn::GetAtt": [
+                    "SSMAutomationRoleCreateBackup",
+                    "Arn"
+                  ]
+                },
+                "schemaVersion": "0.3",
+                "parameters": {
+                  "InstanceId": {
+                    "type": "String",
+                    "description": "List of instances to execute tasks"
+                  },
+                  "BackupSnapshotTags": {
+                    "type": "StringMap",
+                    "description": "Tags that will be attached to backup snapshots in format {\"tagkey\": \"tagvalue\"}"
+                  },
+                  "BackupVaultName": {
+                    "type": "String",
+                    "description": "Name of backup vault to place backups."
+                  },
+                  "DeleteAfterDays": {
+                    "type": "Integer",
+                    "description": "How long created backups should be kept for"
+                  }
+                },
+                "mainSteps": [
+                  {
+                    "name": "CreateOnDemandBackup",
+                    "action": "aws:executeAwsApi",
+                    "inputs": {
+                      "Service": "backup",
+                      "Api": "StartBackupJob",
+                      "ResourceArn": "arn:aws:ec2:{{ global:REGION }}:{{ global:ACCOUNT_ID }}:instance/{{ InstanceId }}",
+                      "BackupVaultName": "{{ BackupVaultName }}",
+                      "IamRoleArn": {
+                        "Fn::GetAtt": [
+                          "SSMAutomationBackupRole",
+                          "Arn"
+                        ]
+                      },
+                      "StartWindowMinutes": 60,
+                      "CompleteWindowMinutes": 120,
+                      "RecoveryPointTags": "{{ BackupSnapshotTags }}",
+                      "Lifecycle": {
+                        "DeleteAfterDays": "{{ DeleteAfterDays }}"
+                        }
+                    },
+                    "outputs": [
+                      {
+                        "Name": "BackupJobID",
+                        "Selector": "$.BackupJobId",
+                        "Type": "String"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "WaitForBackupToFinish",
+                    "action": "aws:waitForAwsResourceProperty",
+                    "timeoutSeconds": 7200,
+                    "isCritical": true,
+                    "inputs": {
+                      "Service": "backup",
+                      "Api": "DescribeBackupJob",
+                      "BackupJobId": "{{ CreateOnDemandBackup.BackupJobID }}",
+                      "PropertySelector": "$.State",
+                      "DesiredValues": [
+                        "COMPLETED"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "SSMAutomationRoleCreateBackup": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+              "Description" : "Role created by COS Core Infra Solution Deployment. Created for the SSMAutomationCreateBackup SSM Automation document to assume. grants SSM automation role permissions",
+              "AssumeRolePolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Effect": "Allow",
+                    "Principal": {
+                      "Service": "ssm.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                  }
+                ]
+              },
+              "Path": "/service-role/",
+              "ManagedPolicyArns": [
+                "arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole"
+              ],
+              "Policies": [
+                {
+                  "PolicyName": "CreateBackup",
+                  "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                      {
+                        "Action": [
+                          "backup:StartBackupJob",
+                          "backup:DescribeBackupJob",
+                          "iam:PassRole"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": "*"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "SSMAutomationBackupRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+              "Description" : "Role created by COS Core Infra Solution Deployment. Created for the SSMAutomationCreateBackup SSM Automation document to assume. role grants permissions to carry out AWS Backup backups",
+              "AssumeRolePolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Effect": "Allow",
+                    "Principal": {
+                      "Service": [
+                        "backup.amazonaws.com"
+                      ]
+                    },
+                    "Action": [
+                      "sts:AssumeRole"
+                    ]
+                  }
+                ]
+              },
+              "Path": "/service-role/",
+              "ManagedPolicyArns": [
+                      "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup",
+                      "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores"
+                ]
+            }
+          },
+
+          "EC2InstanceRoleforSSMManagement": {
+              "Type": "AWS::IAM::Role",
+              "Properties": {
+                  "Description" : "Role created by COS Monitoring Solution Deployment. Grants all permissions necessary for COS create cloudwatch alarms Lambda and SSM to setup, configure and manage EC2 instances (that are tagged with management key and value)",
+                  "AssumeRolePolicyDocument": {
+                      "Version": "2012-10-17",
+                      "Statement": [
+                          {
+                              "Effect": "Allow",
+                              "Principal": {
+                                  "Service": [
+                                      "ec2.amazonaws.com"
+                                  ]
+                              },
+                              "Action": [
+                                  "sts:AssumeRole"
+                              ]
+                          }
+                      ]
+                  },
+                  "Path": "/",
+                  "ManagedPolicyArns": [
+                      "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+                      "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+                  ]
+              }
+          },
+
+          "EC2InstanceProfileforSSMManagement": {
+              "Type": "AWS::IAM::InstanceProfile",
+              "Properties": {
+                  "Roles": [ { "Ref" : "EC2InstanceRoleforSSMManagement" } ],
+                  "InstanceProfileName": {
+                      "Fn::Sub": "COSEC2InstanceProfileforSSMManagement-${AWS::Region}"
+                  }
+
+              }
+          },
+
+
+
+          "CreateSNOWSNSTopic": {
+              "Type": "AWS::SNS::Topic",
+              "Properties": {
+                  "DisplayName": {
+                      "Ref": "SNOWSNSTopicName"
+                  },
+                  "TopicName": {
+                      "Ref": "SNOWSNSTopicName"
+                  }
+              }
+          },
+
+          "CreateSNOWSNSTopicPolicy": {
+              "Type": "AWS::SNS::TopicPolicy",
+              "DependsOn": "CreateSNOWSNSTopic",
+              "Properties": {
+                  "PolicyDocument": {
+                      "Version": "2012-10-17",
+                      "Statement": [
+                            {
+                              "Sid": "SnsTopicPolicy",
+                              "Effect": "Allow",
+                              "Principal": {
+                                "AWS": "*",
+                                "Service": "cloudwatch.amazonaws.com",
+                                "Service": "config.amazonaws.com",
+                                "Service": "events.amazonaws.com"
+                              },
+                              "Action": [
+                                "SNS:GetTopicAttributes",
+                                "SNS:Subscribe",
+                                "SNS:ListSubscriptionsByTopic",
+                                "SNS:Publish",
+                                "SNS:Receive"
+                              ],
+                              "Resource": {
+                                  "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${SNOWSNSTopicName}"
+                              },
+                              "Condition": {
+                                "StringEquals": {
+                                  "AWS:SourceOwner": {
+                                      "Fn::Sub": "${AWS::AccountId}"
+                                  }
+                                }
+                              }
+
+                          }
+                      ]
+                  },
+                  "Topics": [
+                      {
+                          "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${SNOWSNSTopicName}"
+                      }
+                  ]
+              }
+          },
+
+          "COSSNOWSecret": {
+            "Type": "AWS::SecretsManager::Secret",
+            "Properties": {
+              "Name": {
+                "Fn::Sub": "cos/snow-${AWS::Region}"
+                },
+              "Description": "API credentials stored for COS-SNOW-Listener lambda function to utilise for API connection with iPaaS API endpoint",
+              "SecretString": {"Fn::Join": [ "", [ "{\r\n\r\n","\"clientid\":\"", { "Ref": "SnowClientId" }, "\",", "\r\n\"clientsecret\":\"", { "Ref": "SnowClientSecret" }, "\"", "\r\n\r\n}" ] ]}
+            }
+          },
+
+          "COSSNOWListener": {
+            "Type": "AWS::Lambda::Function",
+            "DependsOn" : "COSSNOWSecret",
+            "Properties": {
+              "Description" : "COS Lambda function that will connect to iPaaS API endpoint via secret manager API key and pass alert payloads to COS MSP ServiceNow",
+              "Tags" : [
+                 {
+                    "Key" : "company_name",
+                    "Value" : { "Ref": "ApiCompanyName" }
+                 }
+              ],
+              "FunctionName": "COS-Lambda-SNOW-Listener",
+              "Handler": "lambda_snow_listener.lambda_handler",
+              "Environment":{
+                 "Variables":{
+                    "company_name": {
+                      "Ref":"ApiCompanyName"
+                    },
+                    "snow_secret": {
+                      "Ref":"COSSNOWSecret"
+                    },
+                    "log_level": {
+                      "Ref":"LogLevel"
+                    }
+                   }
+                 },
+              "Role": {
+                "Fn::GetAtt": [
+                  "COSSNOWAPIListenerRole",
+                  "Arn"
+                ]
+              },
+              "Code": {
+                "S3Bucket": {"Fn::Sub": "${SourceBucketPrefix}-source-${AWS::Region}"},
+                "S3Key": "lambda_snow_listener.zip"
+              },
+              "Runtime": "python3.12",
+              "Timeout": 300
+            }
+          },
+
+          "COSSNOWAPIListenerRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+              "Description" : "Role created by COS Core Infra Solution Deployment. Created for the COS SNOW Listener API Lambda function to assume. grants permissions to retrieve API password from Secrets Manager and to query ec2 tags for instance name",
+              "AssumeRolePolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [{
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": [ "lambda.amazonaws.com","events.amazonaws.com" ]
+                  },
+                  "Action": [ "sts:AssumeRole" ]
+                }]
+              },
+              "Path": "/",
+              "Policies": [{
+                "PolicyName": "COSSNOWAWSLambdaBasicExecutionRole",
+                "PolicyDocument": {
+                  "Version": "2012-10-17",
+                  "Statement": [{
+                    "Effect": "Allow",
+                    "Action": [
+                      "logs:CreateLogGroup",
+                      "logs:CreateLogStream",
+                      "logs:PutLogEvents"
+                    ],
+                    "Resource": "*"
+                  }]
+                }
+              },
+              {
+                "PolicyName": "COSSNOWSecretsManagerAccess",
+                "PolicyDocument": {
+                  "Version": "2012-10-17",
+                  "Statement": [{
+                    "Effect": "Allow",
+                    "Action": [
+                      "secretsmanager:GetRandomPassword",
+                      "secretsmanager:GetResourcePolicy",
+                      "secretsmanager:GetSecretValue",
+                      "secretsmanager:DescribeSecret",
+                      "secretsmanager:ListSecretVersionIds",
+                      "secretsmanager:ListSecrets"
+                    ],
+                    "Resource": { "Ref": "COSSNOWSecret" }
+                    }]
+                  }
+                },
+                {
+                  "PolicyName": "COSSNOWDescribeEc2Tags",
+                  "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [{
+                      "Effect": "Allow",
+                      "Action": [
+                        "ec2:DescribeTags"
+                      ],
+                      "Resource": "*"
+                    }]
+                  }
+                }]
+              }
+          },
+
+          "LambdaOrEmailSNSSubscription": {
+            "Type": "AWS::SNS::Subscription",
+            "Properties": {
+              "Protocol":
+              {
+                "Fn::If" :
+                [
+                  "SNSChecking",
+                  "lambda",
+                  "email"
+                ]
+              },
+              "Endpoint": {
+                "Fn::If" :
+                  [
+                    "SNSChecking",
+                    {"Fn::GetAtt": [ "COSSNOWListener", "Arn" ]},
+                    {"Ref": "MonitoringEmailRecipient"}
+                  ]
+                },
+               "TopicArn" : { "Ref": "CreateSNOWSNSTopic" }
+                }
+          },
+
+          "LambdaInvokePermission": {
+            "Type": "AWS::Lambda::Permission",
+            "DependsOn": "COSSNOWListener",
+            "Properties": {
+              "Action": "lambda:InvokeFunction",
+              "Principal": "sns.amazonaws.com",
+              "SourceArn": { "Ref": "CreateSNOWSNSTopic" },
+              "FunctionName": {
+                "Fn::GetAtt": [ "COSSNOWListener", "Arn" ]
+              }
+            }
+          },
+
+
+          "LambdaRoleForInstallSSM": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+              "Description" : "Role created by COS Core Infra Solution Deployment. Created for the COS BrownField Install SSM Lambda function to assume. grants permissions to retrieve scripts from S3 bucket and EC2 and SSM permissions to use scripts to install SSM agent",
+              "AssumeRolePolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Effect": "Allow",
+                    "Principal": {
+                      "Service": [
+                        "lambda.amazonaws.com"
+                      ]
+                    },
+                    "Action": [
+                      "sts:AssumeRole"
+                    ]
+                  }
+                ]
+              },
+              "Path": "/",
+              "Policies": [
+                {
+                  "PolicyName": "LambdaRoleForInstallSSMBasicExecutionRole",
+                  "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                      {
+                        "Effect": "Allow",
+                        "Action": [
+                          "logs:CreateLogStream",
+                          "logs:PutLogEvents"
+                        ],
+                        "Resource": "*"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "PolicyName": "LambdaRoleForInstallSSMAgentS3",
+                  "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                      {
+                        "Effect": "Allow",
+                        "Action": [
+                          "s3:GetObject"
+                        ],
+                        "Resource": {
+                          "Fn::Sub": "arn:aws:s3:::${SourceBucketPrefix}-source-${AWS::Region}/*"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "PolicyName": "LambdaRoleForInstallSSMAgentEc2",
+                  "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                      {
+                        "Effect": "Allow",
+                        "Action": [
+                            "ec2:DescribeInstances",
+                            "ec2:StartInstances",
+                            "ec2:DescribeInstanceAttribute",
+                            "ec2:ModifyInstanceAttribute",
+                            "ec2:StopInstances"
+                        ],
+                        "Resource": "*"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "PolicyName": "LambdaRoleForInstallSSMAgentSSM",
+                  "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                      {
+                        "Effect": "Allow",
+                        "Action": "ssm:DescribeInstanceInformation",
+                        "Resource": "*"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "InstallSSMonBrownfield": {
+                  "Type": "AWS::Lambda::Function",
+                  "DependsOn" : "LambdaRoleForInstallSSM",
+                "Properties": {
+                  "Description": "COS Lambda function that will install the SSM agent on existing instances while onboarding.To function, EC2 instances must be tagged with cos_brownfield_deploy:yes and the lambda manually triggered" ,
+                  "Handler": "lambda_install_ssm.lambda_handler",
+                  "FunctionName": "COS-Lambda-BrownField-Install-SSM-Agent",
+                  "Role": {
+                    "Fn::GetAtt": [
+                      "LambdaRoleForInstallSSM",
+                      "Arn"
+                    ]
+                  },
+                  "Code": {
+                    "S3Bucket": {"Fn::Sub": "${SourceBucketPrefix}-source-${AWS::Region}"},
+                    "S3Key": "lambda_install_ssm.zip"
+                  },
+                  "Runtime": "python3.12",
+                  "Timeout": "600",
+                  "MemorySize": 1024,
+                  "Environment": {
+                    "Variables": {
+                      "linux_script_name": {
+                        "Ref": "LinuxScriptName"
+                      },
+                      "windows_script_name": {
+                        "Ref": "WindowsScriptName"
+                      },
+                      "script_bucket_name": {
+                        "Fn::Sub": "${SourceBucketPrefix}-source-${AWS::Region}"
+                      }
+                    }
+                  }
+                }
+          },
+          "CMDBExportLambdaFunction": {
+            "Type": "AWS::Lambda::Function",
+            "Condition": "CMDBExportDeploy",
+            "Properties": {
+              "Description": "COS Lambda that will query SSM inventory and EC2 instances to collate data and store export a CSV file to s3 bucket vaned in variables. data is to be exported to CMDB",
+              "Handler": "lambda_create_cmdb_export.lambda_handler",
+              "FunctionName": "COS-Lambda-CMDB-Export",
+              "Role": {
+                "Fn::GetAtt": [
+                  "CMDBExportLambdaRole",
+                  "Arn"
+                ]
+              },
+              "Code": {
+                "S3Bucket": {"Fn::Sub": "${SourceBucketPrefix}-source-${AWS::Region}"},
+                "S3Key": "lambda_create_cmdb_export.zip"
+              },
+              "Runtime": "python3.12",
+              "Timeout": 120,
+              "MemorySize": 128,
+              "Environment": {
+                "Variables": {
+                  "EXPORT_BUCKET_NAME": {
+                    "Ref": "CMDBExportLambdaS3Bucket"
+                  },
+                  "TAGS_CONDITION_KEY": {
+                    "Ref": "TagsConditionKey"
+                  },
+                  "TAGS_CONDITION_VALUE": {
+                    "Ref": "TagsConditionValue"
+                  }
+                }
+              }
+            }
+          },
+          "CMDBExportLambdaRole": {
+            "Type": "AWS::IAM::Role",
+            "Condition": "CMDBExportDeploy",
+            "Properties": {
+              "Description" : "Role created by COS Core Infra Solution Deployment. Created for the COS CMDB Export Lambda function to assume. and grants read only access to EC2 and SSM",
+              "AssumeRolePolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Effect": "Allow",
+                    "Principal": {
+                      "Service": "lambda.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                  }
+                ]
+              },
+              "Path": "/service-role/",
+              "ManagedPolicyArns": [
+                "arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess",
+                "arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess"
+                ],
+              "Policies": [
+                {
+                  "PolicyName": "LambdaPolicy",
+                  "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                      {
+                        "Action": [
+                          "logs:CreateLogGroup",
+                          "logs:CreateLogStream",
+                          "logs:PutLogEvents"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/*"
+                      },
+                      {
+                        "Action": [
+                          "s3:PutObject"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": {
+                          "Fn::Sub": "arn:aws:s3:::${CMDBExportLambdaS3Bucket}/*"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "CMDBExportLambdaEventbridge": {
+            "Type": "AWS::Events::Rule",
+            "Condition": "CMDBExportDeploy",
+            "Properties": {
+              "Description": "COS EventBridge Rule that will trigger the COS CMDB Export Lambda function as per cron schedule. lambda will creating EC2 inventory for CMDB",
+              "ScheduleExpression": {
+                "Ref": "CMDBExportScheduleExpression"
+              },
+              "State": "ENABLED",
+              "Targets": [
+                {
+                  "Arn": {
+                    "Fn::GetAtt": [
+                      "CMDBExportLambdaFunction",
+                      "Arn"
+                    ]
+                  },
+                  "Id": "CMDBExportLambdaFunction"
+                }
+              ]
+            }
+          },
+          "CMDBExportLambdaS3Bucket": {
+            "Type": "AWS::S3::Bucket",
+            "Condition": "CMDBExportDeploy",
+            "Properties": {
+              "BucketName": {
+                "Fn::Sub": "cmdb-export-${AWS::AccountId}-${AWS::Region}"
+              },
+              "BucketEncryption": {
+                "ServerSideEncryptionConfiguration": [
+                  {
+                    "ServerSideEncryptionByDefault": {
+                      "SSEAlgorithm": "AES256"
+                    }
+                  }
+                ]
+              },
+              "PublicAccessBlockConfiguration": {
+                "BlockPublicAcls": true,
+                "BlockPublicPolicy": true,
+                "IgnorePublicAcls": true,
+                "RestrictPublicBuckets": true
+              }
+            }
+          },
+          "CMDBExportLambdaS3BucketBucketPolicy": {
+              "Type": "AWS::S3::BucketPolicy",
+              "Condition": "CMDBExportDeploy",
+              "Properties": {
+                  "Bucket": {
+                      "Ref": "CMDBExportLambdaS3Bucket"
+                  },
+                  "PolicyDocument": {
+                      "Version": "2012-10-17",
+                      "Statement": [
+                          {
+                              "Sid": "AllowSSLRequestsOnly",
+                              "Action": "s3:*",
+                              "Effect": "Deny",
+                              "Resource": [
+                                {
+                                  "Fn::Join": [
+                                      "",
+                                      [
+                                          "arn:aws:s3:::",
+                                          {
+                                              "Ref": "CMDBExportLambdaS3Bucket"
+                                          },
+                                          "/*"
+                                      ]
+                                  ]
+                                },
+                                {
+                                  "Fn::Join": [
+                                      "",
+                                      [
+                                          "arn:aws:s3:::",
+                                          {
+                                              "Ref": "CMDBExportLambdaS3Bucket"
+                                          }
+                                      ]
+                                    ]
+                                  }
+                                ],
+                              "Condition": {
+                                  "Bool": {
+                                      "aws:SecureTransport": "false"
+                                  }
+                              },
+                              "Principal": "*"
+                          }
+                      ]
+                  }
+              }
+          },
+          "EC2TagsLinux":{
+            "Type": "AWS::SSM::Parameter",
+            "Condition" : "AutoTagLambdaDeploy",
+            "Properties": {
+              "Name": "EC2-Tags-Linux",
+              "Type": "String",
+              "Value": "[\n{ \"Key\": \"cos_managed\",\n \"Value\": \"yes\" },\n{ \"Key\": \"cos_backup\",\n \"Value\": \"yes\" },\n{ \"Key\": \"Patch Group\",\n \"Value\": \"coslinuxserver\" }]",
+              "Description": "COS SSM Parameter with tags for Linux EC2 instances. used by the COS Lambda-AutoTag-EC2-instances lambda function to auto tag launched EC2 instances with the values in this item"
+            }
+          },
+          "EC2TagsWindows":{
+            "Type": "AWS::SSM::Parameter",
+            "Condition" : "AutoTagLambdaDeploy",
+            "Properties": {
+              "Name": "EC2-Tags-Windows",
+              "Type": "String",
+              "Value": "[\n{ \"Key\": \"cos_managed\",\n \"Value\": \"yes\" },\n{ \"Key\": \"cos_backup\",\n \"Value\": \"yes\" },\n{ \"Key\": \"Patch Group\",\n \"Value\": \"coswindowsserver\" }]",
+              "Description": "SSM Parameter with tags for Windows EC2 instances. used by the COS Lambda-AutoTag-EC2-instances lambda function to auto tag launched EC2 instances with the values in this item"
+            }
+          },
+          "AutotaggingEventRule":{
+            "Type" : "AWS::Events::Rule",
+            "Condition" : "AutoTagLambdaDeploy",
+            "Properties" : {
+                "Description" : "COS EventBridge Rule for that will filter for EC2 launch events. once an event occurs the rule will trigger the COS Lambda-AutoTag-EC2-instances lambda function",
+                "EventPattern" : {
+                  "source": ["aws.ec2"],
+                  "detail-type": ["EC2 Instance State-change Notification"],
+                  "detail": {
+                    "state": ["pending"]
+                  }
+                },
+                "State" : "ENABLED",
+                "EventBusName": "default",
+                "Targets" : [
+                  {
+                      "Id": "Lambda_Automatic_Tags",
+                      "Arn": {
+                        "Fn::GetAtt" : [
+                          "AutomaticTagsLambda",
+                          "Arn"
+                        ]
+                      }
+                    }
+                  ]
+              }
+            },
+          "LambdaAutomaticTagsRole": {
+            "Type": "AWS::IAM::Role",
+            "Condition" : "AutoTagLambdaDeploy",
+            "Properties": {
+                "Description" : "Role created by COS Core Infra Solution Deployment. Created for the COS Lambda-AutoTag-EC2-instances lambda function to assume. grants access to SSM parameter store and EC2",
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "lambda.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "Description": "Allows Lambda to call AWS services on your behalf",
+                "MaxSessionDuration": 3600,
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "LambdaDocumentAutomationTagging",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                  "Effect": "Allow",
+                                  "Action": [
+                                    "ec2:DescribeImages",
+                                    "ec2:DescribeInstances",
+                                    "ssm:DescribeParameters",
+                                    "ec2:DescribeTags",
+                                    "ec2:CreateTags",
+                                    "ssm:GetParameters",
+                                    "ssm:GetParameter"
+                                  ],
+                                  "Resource": "*"
+                                },
+                                {
+                                  "Effect": "Allow",
+                                  "Action": "logs:CreateLogGroup",
+                                  "Resource": {
+                                    "Fn::Sub": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+                                  }
+                               },
+                               {
+                                  "Effect": "Allow",
+                                  "Action": [
+                                      "logs:CreateLogStream",
+                                      "logs:PutLogEvents"
+                                  ],
+                                  "Resource": [
+                                    {
+                                      "Fn::Sub" : "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/Lambda-AutoTag-EC2-instances:*"
+                                    }
+                                  ]
+                               }
+                            ]
+                        }
+                    }
+                ]
+              }
+            },
+          "AutomaticTagsLambda": {
+            "Type": "AWS::Lambda::Function",
+            "Condition" : "AutoTagLambdaDeploy",
+            "Properties": {
+              "Description": "COS Lambda function will trigger by AutotaggingEventRule Eventbridge rule on EC2 launch and tag EC2s with the values found in SSM parameter store items EC2-Tags-Windows and EC2-Tags-Linux",
+              "FunctionName": "COS-Lambda-AutoTag-EC2-instances",
+              "Handler": "lambda_automatic_tagging_ec2_instances.lambda_handler",
+              "Role": {
+                "Fn::GetAtt": [
+                  "LambdaAutomaticTagsRole",
+                  "Arn"
+                ]
+              },
+              "Code": {
+                "S3Bucket": {"Fn::Sub": "${SourceBucketPrefix}-source-${AWS::Region}"},
+                "S3Key": "lambda_automatic_tagging_ec2_instances.zip"
+              },
+              "Runtime": "python3.12",
+              "Timeout": 300
+              }
+            },
+          "PermissionForInvokingAutotaggingLambda": {
+            "Type": "AWS::Lambda::Permission",
+            "Condition" : "AutoTagLambdaDeploy",
+            "DependsOn": "AutotaggingEventRule",
+            "Properties": {
+                "FunctionName": {
+                    "Ref": "AutomaticTagsLambda"
+                },
+                "Action": "lambda:InvokeFunction",
+                "Principal": "events.amazonaws.com",
+                "SourceArn": {
+                    "Fn::GetAtt": [
+                        "AutotaggingEventRule",
+                        "Arn"
+                    ]
+                }
+            }
+         }
+},
+  "Outputs": {
+    "SNOWSNSTopicARN": {
+      "Description": "SNOW SNS topic ARN",
+      "Value": { "Ref": "CreateSNOWSNSTopic" }
+    },
+    "SSMAutomationDocumentRunCommandLinux": {
+      "Description": "SSM Automation Document to run shell command on Linux EC2 instances",
+      "Value": { "Ref": "SSMAutomationDocumentRunCommandLinux" }
+    },
+    "SSMAutomationDocumentRunCommandWindows": {
+      "Description": "SSM Automation Document to run powershell command on Windows EC2 instance",
+      "Value": { "Ref": "SSMAutomationDocumentRunCommandWindows" }
+    },
+    "SSMAutomationCreateBackup": {
+      "Description": "SSM Automation Document to create AWS Backup snaphot of an EC2 instance",
+      "Value": { "Ref": "SSMAutomationCreateBackup" }
+    }
+  }
+
+}
